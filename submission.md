@@ -28,7 +28,7 @@
                 - When the file is run directly (python app.py), it calls create_app() and starts Flask’s development server with debug=True.
 
 - `models.py`: <models, association tables, key columns>
-        - This module is the data layer for Mixtape, a social music-sharing app. It defines every SQLAlchemy model (database table) the app uses, plus the association tables that link them. It holds no business logic, only the schema, relationships, and serialization helpers.
+    - This module is the data layer for Mixtape, a social music-sharing app. It defines every SQLAlchemy model (database table) the app uses, plus the association tables that link them. It holds no business logic, only the schema, relationships, and serialization helpers.
         - helper function: generate_uuid() returns a random UUID string. It’s the default primary-key generator for every model, so IDs are 36-character strings rather than auto-incrementing integers.
         - association tables: 
             - 'friendships' links two users (user_id, friend_id). Despite the “symmetric” comment, the table itself doesn’t enforce symmetry, so the app code has to insert both directions.
