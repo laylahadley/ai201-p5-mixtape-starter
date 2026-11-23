@@ -97,7 +97,7 @@ The seed data hides this case, because each seeded friend also has a listen from
 
 ---
 
-### Issue #3 — The same song keeps showing up twice in search
+### **Issue #3 — The same song keeps showing up twice in search**
 
 **Reproduction steps**
 After a fresh `python seed_data.py`, I ran `GET /songs/search?q=Anthem`. The response had `count: 3`: Crown Heights Anthem three times with the same song ID. I then searched for songs with different numbers of tags:
@@ -107,10 +107,20 @@ After a fresh `python seed_data.py`, I ran `GET /songs/search?q=Anthem`. The res
 
 The number of duplicate copies always equals the song's number of tags, and songs with 0 or 1 tag appear once. The test `test_search_no_duplicates_multi_tag_song` also fails.
 
-**Navigation strategy** — *(Milestone 3)*
-**Root cause** — *(Milestone 3)*
-**Fix** — *(Milestone 3)*
-**Side-effect check** — *(Milestone 3)*
+**Navigation strategy (how I found the root cause)**
+I traced top-down from the endpoint. `search()` in `routes/songs.py` passes the query string to `search_songs()` and returns `len(results)` as the count without modifying the list, so the duplicates were coming from the service. In `search_songs()` in `services/search_service.py`, the filter only compares `Song.title` and `Song.artist`, yet the query also does `.outerjoin(song_tags, Song.id == song_tags.c.song_id)`. My reproduction showed the number of copies always equaled the song's number of tags, and this join is the only place tags enter the query, so it became my hypothesis. To confirm where the `tags` field in the output comes from, I opened `models.py`: `Song.tags` is a relationship through `song_tags`, and `Song.to_dict()` builds the list from `self.tags`, not from the joined rows. The confident moment was running the same query two ways in a Python shell: with the join, "Anthem" returned 3 rows; without it, 1 row, and that song's tags still loaded through the relationship.
+
+**Root cause**
+A SQL join returns one row for every matching pair. `search_songs()` outer-joins each matching `Song` to the `song_tags` association table, so a song with three tags matches three `song_tags` rows and produces three result rows. `.scalars().all()` turns each row into a `Song` object, and a plain `select(Song)` in SQLAlchemy 2.0 does not remove duplicate entities, so "Crown Heights Anthem" (tags: rap, hip-hop, boom bap) came back three times. A song with one tag produced one row, and a song with zero tags also produced exactly one row, because an *outer* join keeps unmatched rows with empty tag columns. That is why only multi-tag songs were duplicated. Nothing in the query reads the joined tag columns: the filter uses only title and artist, and the tags shown in each result are loaded separately through the `Song.tags` relationship in `to_dict()`. So the join added rows without adding information. The correct behavior, one result per song, requires a query whose rows correspond to songs rather than song–tag pairs.
+
+**Fix**
+I removed the `.outerjoin(song_tags, Song.id == song_tags.c.song_id)` line from `search_songs()`, so the query selects from `Song` alone and returns one row per matching song. I considered adding `.distinct()` instead, but that would only hide the duplicates while keeping a join nothing uses; removing the join removes the cause.
+
+**Side-effect check**
+- **Tags still appear:** searching "Anthem" returns one result that still lists all three tags. This was the most plausible thing to break, since a join on tags was removed; it didn't, because the tags were never coming from the join.
+- **Zero-tag songs still appear:** "Midnight" (Midnight Drive, 0 tags) still returns 1 result. Before the fix, the *outer* join was what kept untagged songs in the results; I checked that a query with no join doesn't lose them.
+- **Artist matching still works:** "Elara" returns both Elara Moon songs (Still Waters and Soft Landing), once each, confirming the title/artist `or_` filter was untouched.
+- **Tests:** all 5 tests in `tests/test_search.py` pass, including the single-tag, multi-tag, and no-tag duplicate tests.
 
 ---
 
