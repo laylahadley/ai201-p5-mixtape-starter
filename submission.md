@@ -68,10 +68,73 @@ Mixtape is a Flask JSON API backed by SQLite through Flask-SQLAlchemy. It has no
 
 ## Root Cause Analyses
 
-*(One entry per issue, added as each fix is completed.)*
+### Issue #1 — My listening streak keeps resetting
+
+**Reproduction steps**
+The streak logic reads the real clock, and today isn't Sunday, so I called `update_listening_streak()` in `services/streak_service.py` directly with chosen dates. I gave an in-memory `User` a streak of 12 and a last listen on Saturday Nov 21, 2026 at 22:00 UTC, then a new listen on Sunday Nov 22 at 09:00 UTC. As controls, I ran the same one-day gap for Sunday → Monday and Monday → Tuesday.
+- Saturday → Sunday: streak went 12 → **1** (expected 13)
+- Sunday → Monday: 12 → 13 (correct)
+- Monday → Tuesday: 12 → 13 (correct)
+
+The gap is identical in all three cases; only a listen that lands on a Sunday resets the streak. The existing test `test_streak_increments_on_sunday` also fails.
+
+**Navigation strategy** — *(Milestone 3)*
+**Root cause** — *(Milestone 3)*
+**Fix** — *(Milestone 3)*
+**Side-effect check** — *(Milestone 3)*
+
+---
+
+### Issue #2 — Friends Listening Now shows people from yesterday
+
+**Reproduction steps**
+The seed data hides this case, because each seeded friend also has a listen from the last 20 minutes and the feed shows only each friend's most recent listen. So I built a throwaway in-memory database with two friends, nova and darius, where darius's only listening event was at 23:59 UTC the previous day. Calling `get_friends_listening_now()` for nova returned `['darius']`. Expected: an empty list, because darius hasn't listened today.
+
+**Navigation strategy** — *(Milestone 3)*
+**Root cause** — *(Milestone 3)*
+**Fix** — *(Milestone 3)*
+**Side-effect check** — *(Milestone 3)*
+
+---
+
+### Issue #3 — The same song keeps showing up twice in search
+
+**Reproduction steps**
+After a fresh `python seed_data.py`, I ran `GET /songs/search?q=Anthem`. The response had `count: 3`: Crown Heights Anthem three times with the same song ID. I then searched for songs with different numbers of tags:
+- "Harlem" (Harlem Renaissance, 3 tags) → 3 copies
+- "Golden" (Golden Hour, 1 tag) → 1 result
+- "Midnight" (Midnight Drive, 0 tags) → 1 result
+
+The number of duplicate copies always equals the song's number of tags, and songs with 0 or 1 tag appear once. The test `test_search_no_duplicates_multi_tag_song` also fails.
+
+**Navigation strategy** — *(Milestone 3)*
+**Root cause** — *(Milestone 3)*
+**Fix** — *(Milestone 3)*
+**Side-effect check** — *(Milestone 3)*
+
+---
+
+### Issue #4 — I got notified when a friend added my song to a playlist but not when they rated it
+
+**Reproduction steps**
+After a fresh seed, `GET /users/<simone_id>/notifications` returned `count: 0`. As kenji, I sent `POST /songs/<crown_heights_anthem_id>/rate` with `{"user_id": "<kenji_id>", "score": 5}`. The response was a saved rating with score 5 and status 201. Re-checking simone's notifications still returned `count: 0`. As a control, nova's notifications contain the seeded `song_added_to_playlist` notification, so the notification system itself works; only ratings produce nothing.
+
+**Navigation strategy** — *(Milestone 3)*
+**Root cause** — *(Milestone 3)*
+**Fix** — *(Milestone 3)*
+**Side-effect check** — *(Milestone 3)*
+
+---
+
+### Issue #5 — The last song in a playlist never shows up
+
+**Reproduction steps**
+After a fresh seed, I queried the `playlist_entries` table for "Friday Energy": 7 rows, positions 1–7, with Harlem Renaissance at position 7. `GET /playlists/<friday_energy_id>/songs` returned `count: 6`, missing Harlem Renaissance. I then inserted After Hours at position 8 (added by simone) and called the endpoint again: `count: 7`, Harlem Renaissance now appeared, and After Hours was missing. The endpoint always omits whichever song has the highest position. The test `test_playlist_returns_all_songs` also fails (returns 4 of 5 songs).
 
 ---
 
 ## AI Usage
 
 *(Completed at the end of the project.)*
+Milestone 1 
+- Gave the AI read access to my fork. It summarized each file’s responsibility and traced the add-to-playlist --> notification flow; I checked each description against the source files and adjusted wording.
