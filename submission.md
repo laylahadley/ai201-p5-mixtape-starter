@@ -68,7 +68,7 @@ Mixtape is a Flask JSON API backed by SQLite through Flask-SQLAlchemy. It has no
 
 ## Root Cause Analyses
 
-### Issue #1 — My listening streak keeps resetting
+### **Issue #1 — My listening streak keeps resetting**
 
 **Reproduction steps**
 The streak logic reads the real clock, and today isn't Sunday, so I called `update_listening_streak()` in `services/streak_service.py` directly with chosen dates. I gave an in-memory `User` a streak of 12 and a last listen on Saturday Nov 21, 2026 at 22:00 UTC, then a new listen on Sunday Nov 22 at 09:00 UTC. As controls, I ran the same one-day gap for Sunday → Monday and Monday → Tuesday.
@@ -78,10 +78,23 @@ The streak logic reads the real clock, and today isn't Sunday, so I called `upda
 
 The gap is identical in all three cases; only a listen that lands on a Sunday resets the streak. The existing test `test_streak_increments_on_sunday` also fails.
 
-**Navigation strategy** — *(Milestone 3)*
-**Root cause** — *(Milestone 3)*
-**Fix** — *(Milestone 3)*
-**Side-effect check** — *(Milestone 3)*
+**Navigation strategy (how I found the root cause)**
+I started from the endpoint in the bug report, `GET /users/<id>/streak`. `streak()` in `routes/users.py` calls `get_streak()` in `services/streak_service.py`, and `get_streak()` only reads the stored `user.listening_streak`. That told me the wrong value was saved when the listen happened, not computed when it was read, so I needed to find where the streak is written. I searched for `listening_streak` across `services/` and `routes/`: every write is in `update_listening_streak()`, which `record_listening_event()` calls from `POST /songs/<id>/listen`. Reading `update_listening_streak()`, I checked that `days_since_last` is computed from calendar dates, so Saturday → Sunday correctly gives 1. That ruled out the date arithmetic. The confident moment was the increment branch: `elif days_since_last == 1 and today.weekday() != 6`. I asked AI how `weekday()` and `isoweekday()` number the days, then verified it myself in Python: for Sunday Nov 22, 2026, `weekday()` returns 6 (and `isoweekday()` returns 7). So the condition is false exactly on Sundays, which matched my reproduction where only the Saturday → Sunday case reset.
+
+**Root cause**
+In `update_listening_streak()`, a streak should increase whenever the new listen is exactly one calendar day after the last one (`days_since_last == 1`). But the increment branch also required `today.weekday() != 6`. Python's `datetime.weekday()` numbers Monday as 0 and Sunday as 6, so on any Sunday that second condition is false. A consecutive-day listen landing on a Sunday therefore skipped the increment branch and fell into the `else` branch meant for skipped days, which sets `listening_streak = 1`. That is why kenji's streak went from 12 to 1 on Sunday morning even though he had listened Saturday, why it happened only on Sundays, and why Monday's listen counted normally again (12 → 1 → 2). Both the module docstring and the function's own rules define a streak as listening on consecutive calendar days, with no exception for any day of the week. `days_since_last == 1` already fully captures "listened yesterday," so correct behavior requires no weekday check at all; the extra condition added a rule the streak definition never had.
+
+**Fix**
+I removed `and today.weekday() != 6` from the increment branch, so it now reads `elif days_since_last == 1:`. The same-day branch (`days_since_last == 0`) and the reset branch (`else`) are unchanged.
+
+**Side-effect check**
+I called `update_listening_streak()` with fixed dates on both sides of the boundary, starting each case from a streak of 12:
+- Saturday → Sunday (consecutive): 12 → 13. This is the reported case, now fixed.
+- Sunday → Monday (consecutive): 12 → 13. Ordinary weekdays are unaffected.
+- **Friday → Sunday (skipped Saturday): 12 → 1.** This was the check most likely to reveal a problem. Removing a condition from the increment branch could have let streaks grow when they shouldn't. It confirms a real missed day still resets the streak, even on a Sunday, because a two-day gap never satisfies `days_since_last == 1`.
+- Sunday → Sunday (two listens on the same day): 12 → 12. The same-day branch still prevents double-counting.
+
+The full test suite passes (13 tests), including `test_streak_increments_on_sunday`, `test_streak_resets_after_skipped_day`, and `test_streak_does_not_double_count_same_day`.
 
 ---
 
