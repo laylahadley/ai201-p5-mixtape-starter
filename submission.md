@@ -98,16 +98,6 @@ The full test suite passes (13 tests), including `test_streak_increments_on_sund
 
 ---
 
-### Issue #2 — Friends Listening Now shows people from yesterday
-
-**Reproduction steps**
-The seed data hides this case, because each seeded friend also has a listen from the last 20 minutes and the feed shows only each friend's most recent listen. So I built a throwaway in-memory database with two friends, nova and darius, where darius's only listening event was at 23:59 UTC the previous day. Calling `get_friends_listening_now()` for nova returned `['darius']`. Expected: an empty list, because darius hasn't listened today.
-
-**Navigation strategy** — *(Milestone 3)*
-**Root cause** — *(Milestone 3)*
-**Fix** — *(Milestone 3)*
-**Side-effect check** — *(Milestone 3)*
-
 ---
 
 ### **Issue #3 — The same song keeps showing up twice in search**
@@ -134,19 +124,6 @@ I removed the `.outerjoin(song_tags, Song.id == song_tags.c.song_id)` line from 
 - **Zero-tag songs still appear:** "Midnight" (Midnight Drive, 0 tags) still returns 1 result. Before the fix, the *outer* join was what kept untagged songs in the results; I checked that a query with no join doesn't lose them.
 - **Artist matching still works:** "Elara" returns both Elara Moon songs (Still Waters and Soft Landing), once each, confirming the title/artist `or_` filter was untouched.
 - **Tests:** all 5 tests in `tests/test_search.py` pass, including the single-tag, multi-tag, and no-tag duplicate tests.
-
----
-
-### Issue #4 — I got notified when a friend added my song to a playlist but not when they rated it
-
-**Reproduction steps**
-After a fresh seed, `GET /users/<simone_id>/notifications` returned `count: 0`. As kenji, I sent `POST /songs/<crown_heights_anthem_id>/rate` with `{"user_id": "<kenji_id>", "score": 5}`. The response was a saved rating with score 5 and status 201. Re-checking simone's notifications still returned `count: 0`. As a control, nova's notifications contain the seeded `song_added_to_playlist` notification, so the notification system itself works; only ratings produce nothing.
-
-**Navigation strategy** — *(Milestone 3)*
-**Root cause** — *(Milestone 3)*
-**Fix** — *(Milestone 3)*
-**Side-effect check** — *(Milestone 3)*
-
 ---
 
 ### **Issue #5 — The last song in a playlist never shows up**
@@ -173,9 +150,35 @@ In `services/playlist_service.py`, I changed the return line from `songs[:-1]` t
 
 ## AI Usage
 
-*(Completed at the end of the project.)*
-Milestone 1 
-- Gave the AI read access to my fork. It summarized each file’s responsibility and traced the add-to-playlist --> notification flow; I checked each description against the source files and adjusted wording.
-- Asked AI the difference between weekday() and isoweekday() for Issue #1; verified in Python that Sunday Nov 22, 2026 gives weekday() = 6.
-- For Issue #3, AI suggested comparing the query with and without the song_tags join; I ran both and saw 3 vs 1 rows with tags still loaded.
-- For Issue #5, AI suggested testing a one-song playlist before fixing; it returned an empty list, which confirmed the slice theory.
+I used Claude as a collaborator throughout setup, codebase orientation, reproduction, and debugging. Claude read my fork directly, explained code and Python behavior, and drafted much of the written text in this document from the results I produced. Claude could not run the app itself, so every output below was checked by running the code myself in GitHub Codespaces, and several of its predictions turned out incomplete or wrong.
+
+**Setup (environment debugging)**
+- My Windows laptop's Device Guard policy blocked `pip.exe`. Claude explained that `python.exe` was still allowed and suggested `python -m pip` instead, which worked.
+- The next error was a blocked SQLAlchemy compiled extension (`_immutabledict_cy`). Claude suggested the `DISABLE_SQLALCHEMY_CEXT_RUNTIME` environment variable. **This only partly worked:** it got past that file but failed on another compiled file (`_result_cy`). We decided patching around the security policy file by file wasn't sustainable and moved the whole project to GitHub Codespaces, where the original setup commands worked.
+
+**Codebase orientation**
+- I gave Claude read access to my fork and asked it to summarize each file's responsibility and trace one feature end to end. It traced the add-to-playlist → notification flow (`routes/playlists.py` → `add_to_playlist()` in `notification_service.py` → `create_notification()` → `get_notifications()`). It also pointed out that `add_to_playlist()` and `rate_song()` live in `notification_service.py` rather than the playlist or song services. Claude drafted the codebase map from this; I checked each file description against the source before committing it.
+
+**Hypotheses before reading code**
+- Before seeing the code, I asked Claude to form hypotheses from the five issue reports alone. Two matched what we later found: an off-by-one for Issue #5 and a database JOIN without de-duplication for Issue #3. **The Issue #1 hypothesis was wrong in its mechanism:** Claude guessed that the code did arithmetic on day-of-week numbers (for example Sunday = 0 minus 1 not matching Saturday = 6). The actual code computed the day gap correctly and instead had an explicit `today.weekday() != 6` condition. This showed me why the assignment says to read the code before trusting a diagnosis.
+
+**Reproduction**
+- Issue #1 only happens on Sundays and the code reads the real clock. Claude suggested calling `update_listening_streak()` directly with fixed Saturday/Sunday dates instead of waiting for a Sunday. I ran it and confirmed only the Saturday → Sunday case reset to 1.
+- Claude noticed the seed data hides Issue #2 (each seeded friend also has a listen from the last 20 minutes, which outranks older listens) and wrote an in-memory test with a single 11:59 PM listen. I ran it and saw yesterday's listener appear.
+- Claude predicted three specific failing tests. **The actual run showed four:** `test_playlist_returns_songs_in_order` also failed. I traced it to the same Issue #5 behavior (the list stopped at Track 4, so the order check failed too).
+
+**Debugging**
+- **Issue #1:** After I found the `today.weekday() != 6` condition, I asked Claude how `weekday()` and `isoweekday()` number the days. It explained that `weekday()` uses Monday = 0 to Sunday = 6 and `isoweekday()` uses Monday = 1 to Sunday = 7. I verified it in Python: Sunday Nov 22, 2026 gives `weekday()` = 6 and `isoweekday()` = 7.
+- **Issue #3:** Claude suggested running the search query with and without the `song_tags` join. I ran both: 3 rows with the join, 1 without, and the song's tags still loaded through the `Song.tags` relationship. That confirmed the join could be removed instead of hidden with `.distinct()`.
+- **Issue #5:** Claude suggested testing a one-song playlist before fixing. It returned an empty list, which confirmed the `songs[:-1]` slice theory, and after the fix I re-ran it to check both sides of the boundary.
+
+**Writing**
+- Claude drafted the root cause analysis entries from my reproduction results and the code we traced together. I checked every number and claim against my own terminal output and the source files, and edited wording where it didn't match what I saw.
+
+---
+
+---
+
+## Commit History
+
+![git log --oneline on bugfix/mixtape](commit-history.png)
