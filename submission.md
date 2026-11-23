@@ -126,10 +126,25 @@ After a fresh seed, `GET /users/<simone_id>/notifications` returned `count: 0`. 
 
 ---
 
-### Issue #5 — The last song in a playlist never shows up
+### **Issue #5 — The last song in a playlist never shows up**
 
 **Reproduction steps**
 After a fresh seed, I queried the `playlist_entries` table for "Friday Energy": 7 rows, positions 1–7, with Harlem Renaissance at position 7. `GET /playlists/<friday_energy_id>/songs` returned `count: 6`, missing Harlem Renaissance. I then inserted After Hours at position 8 (added by simone) and called the endpoint again: `count: 7`, Harlem Renaissance now appeared, and After Hours was missing. The endpoint always omits whichever song has the highest position. The test `test_playlist_returns_all_songs` also fails (returns 4 of 5 songs).
+
+**Navigation strategy (how I found the root cause)**
+I started at the route instead of jumping to a service. `get_songs()` in `routes/playlists.py` calls `get_playlist_songs(playlist_id)` and returns `"count": len(songs)` with no filtering, so the list was already short when it came back from the service. Next I opened `get_playlist_songs()` in `services/playlist_service.py`. Its query joins `playlist_entries`, filters by `playlist_id`, orders by `position` ascending, and calls `.all()`. During reproduction, my direct query of the same table with the same filter returned all 7 rows, so I reasoned the query itself was fine and the songs were being lost after it. The confident moment was the return line: `[song.to_dict() for song in songs[:-1]]`. Before changing anything, I confirmed the theory by calling the function on an in-memory playlist holding exactly one song: it returned an empty list. I also searched for every caller of `get_playlist_songs` (the route, an unused import inside `add_to_playlist()`, and the tests) to know what the fix could affect.
+
+**Root cause**
+`get_playlist_songs()` builds the correct, complete list of songs ordered by `playlist_entries.position` ascending, then returns `songs[:-1]`. In Python, the slice `[:-1]` means "every element except the last one." Because the list is sorted ascending by position, and a newly added song always gets the highest position, the dropped element is always the most recently added song. That explains darius's "weirder" observation: when simone added a song, it took over the last slot, so the previously hidden song moved back into range and her new song became the hidden one. The same slice made a one-song playlist return nothing. The function's own docstring says it "returns all songs in the playlist," and nothing in the app needs the list trimmed, so the correct behavior is to return the full list.
+
+**Fix**
+In `services/playlist_service.py`, I changed the return line from `songs[:-1]` to `songs`, so every row the query returns is serialized. This was a one-line change; the query, ordering, and route were already correct.
+
+**Side-effect check**
+- **Ordering:** `GET /playlists/<friday_energy_id>/songs` now returns every song in position order with the newest song last. Removing the slice could only change how many songs come back, not their order, and this confirmed it.
+- **Both sides of the boundary:** I re-ran my in-memory check. An empty playlist still returns `[]` (an empty list sliced or not is still empty) and a one-song playlist now returns that song instead of nothing.
+- **Other callers:** `get_playlist_songs` is also imported inside `add_to_playlist()` in `services/notification_service.py`, but that function never calls it, so playlist-add notifications cannot be affected.
+- **Tests:** all 3 tests in `tests/test_playlists.py` pass, including `test_playlist_returns_songs_in_order` and `test_empty_playlist_returns_empty_list`.
 
 ---
 
