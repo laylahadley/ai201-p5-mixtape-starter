@@ -176,3 +176,6 @@ In `services/playlist_service.py`, I changed the return line from `songs[:-1]` t
 *(Completed at the end of the project.)*
 Milestone 1 
 - Gave the AI read access to my fork. It summarized each file’s responsibility and traced the add-to-playlist --> notification flow; I checked each description against the source files and adjusted wording.
+- Asked AI the difference between weekday() and isoweekday() for Issue #1; verified in Python that Sunday Nov 22, 2026 gives weekday() = 6.
+- For Issue #3, AI suggested comparing the query with and without the song_tags join; I ran both and saw 3 vs 1 rows with tags still loaded.
+- For Issue #5, AI suggested testing a one-song playlist before fixing; it returned an empty list, which confirmed the slice theory.
